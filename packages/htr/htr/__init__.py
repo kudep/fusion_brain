@@ -1,0 +1,1 @@
+from .run import img2text

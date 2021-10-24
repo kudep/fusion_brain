@@ -1,0 +1,18 @@
+FROM python:3.7.6
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --allow-unauthenticated \
+        locales curl libgl1-mesa-glx gcc ffmpeg libsm6 libxext6 &&\
+    printf '%s\n%s\n' 'en_US.UTF-8 UTF-8' 'ru_RU.UTF-8 UTF-8' >> /etc/locale.gen && \
+    locale-gen && \
+    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false &&  \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -rf /root/.cache
+
+ENV LANG='en_US.UTF-8' LANGUAGE='en_US.UTF-8' LC_ALL='en_US.UTF-8'
+
+RUN useradd -ms /bin/bash user
+
+USER user
+WORKDIR /home/user
+WORKDIR /home/jovyan
