@@ -11,10 +11,17 @@ from .dataloader_iam import Batch
 # Disable eager mode
 tf.compat.v1.disable_eager_execution()
 
+gpus = tf.config.experimental.list_physical_devices("GPU")
+if gpus:
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+
 data_dir = pathlib.Path("/htr_data")
+
 
 class DecoderType:
     """CTC decoder types."""
+
     BestPath = 0
     BeamSearch = 1
     WordBeamSearch = 2
@@ -23,11 +30,13 @@ class DecoderType:
 class Model:
     """Minimalistic TF model for HTR."""
 
-    def __init__(self,
-                 char_list: List[str],
-                 decoder_type: str = DecoderType.BestPath,
-                 must_restore: bool = False,
-                 dump: bool = False) -> None:
+    def __init__(
+        self,
+        char_list: List[str],
+        decoder_type: str = DecoderType.BestPath,
+        must_restore: bool = False,
+        dump: bool = False,
+    ) -> None:
         """Init model: add CNN, RNN and CTC and initialize TF."""
         self.dump = dump
         self.char_list = char_list
@@ -36,7 +45,7 @@ class Model:
         self.snap_ID = 0
 
         # Whether to use normalization over a batch or a population
-        self.is_train = tf.compat.v1.placeholder(tf.bool, name='is_train')
+        self.is_train = tf.compat.v1.placeholder(tf.bool, name="is_train")
 
         # input image batch
         self.input_imgs = tf.compat.v1.placeholder(tf.float32, shape=(None, None, None))
@@ -69,13 +78,19 @@ class Model:
         pool = cnn_in4d  # input to first CNN layer
         for i in range(num_layers):
             kernel = tf.Variable(
-                tf.random.truncated_normal([kernel_vals[i], kernel_vals[i], feature_vals[i], feature_vals[i + 1]],
-                                           stddev=0.1))
-            conv = tf.nn.conv2d(input=pool, filters=kernel, padding='SAME', strides=(1, 1, 1, 1))
+                tf.random.truncated_normal(
+                    [kernel_vals[i], kernel_vals[i], feature_vals[i], feature_vals[i + 1]], stddev=0.1
+                )
+            )
+            conv = tf.nn.conv2d(input=pool, filters=kernel, padding="SAME", strides=(1, 1, 1, 1))
             conv_norm = tf.compat.v1.layers.batch_normalization(conv, training=self.is_train)
             relu = tf.nn.relu(conv_norm)
-            pool = tf.nn.max_pool2d(input=relu, ksize=(1, pool_vals[i][0], pool_vals[i][1], 1),
-                                    strides=(1, stride_vals[i][0], stride_vals[i][1], 1), padding='VALID')
+            pool = tf.nn.max_pool2d(
+                input=relu,
+                ksize=(1, pool_vals[i][0], pool_vals[i][1], 1),
+                strides=(1, stride_vals[i][0], stride_vals[i][1], 1),
+                padding="VALID",
+            )
 
         self.cnn_out_4d = pool
 
@@ -85,91 +100,100 @@ class Model:
 
         # basic cells which is used to build RNN
         num_hidden = 256
-        cells = [tf.compat.v1.nn.rnn_cell.LSTMCell(num_units=num_hidden, state_is_tuple=True) for _ in
-                 range(2)]  # 2 layers
+        cells = [
+            tf.compat.v1.nn.rnn_cell.LSTMCell(num_units=num_hidden, state_is_tuple=True) for _ in range(2)
+        ]  # 2 layers
 
         # stack basic cells
         stacked = tf.compat.v1.nn.rnn_cell.MultiRNNCell(cells, state_is_tuple=True)
 
         # bidirectional RNN
         # BxTxF -> BxTx2H
-        (fw, bw), _ = tf.compat.v1.nn.bidirectional_dynamic_rnn(cell_fw=stacked, cell_bw=stacked, inputs=rnn_in3d,
-                                                                dtype=rnn_in3d.dtype)
+        (fw, bw), _ = tf.compat.v1.nn.bidirectional_dynamic_rnn(
+            cell_fw=stacked, cell_bw=stacked, inputs=rnn_in3d, dtype=rnn_in3d.dtype
+        )
 
         # BxTxH + BxTxH -> BxTx2H -> BxTx1X2H
         concat = tf.expand_dims(tf.concat([fw, bw], 2), 2)
 
         # project output to chars (including blank): BxTx1x2H -> BxTx1xC -> BxTxC
         kernel = tf.Variable(tf.random.truncated_normal([1, 1, num_hidden * 2, len(self.char_list) + 1], stddev=0.1))
-        self.rnn_out_3d = tf.squeeze(tf.nn.atrous_conv2d(value=concat, filters=kernel, rate=1, padding='SAME'),
-                                     axis=[2])
+        self.rnn_out_3d = tf.squeeze(
+            tf.nn.atrous_conv2d(value=concat, filters=kernel, rate=1, padding="SAME"), axis=[2]
+        )
 
     def setup_ctc(self) -> None:
         """Create CTC loss and decoder."""
         # BxTxC -> TxBxC
         self.ctc_in_3d_tbc = tf.transpose(a=self.rnn_out_3d, perm=[1, 0, 2])
         # ground truth text as sparse tensor
-        self.gt_texts = tf.SparseTensor(tf.compat.v1.placeholder(tf.int64, shape=[None, 2]),
-                                        tf.compat.v1.placeholder(tf.int32, [None]),
-                                        tf.compat.v1.placeholder(tf.int64, [2]))
+        self.gt_texts = tf.SparseTensor(
+            tf.compat.v1.placeholder(tf.int64, shape=[None, 2]),
+            tf.compat.v1.placeholder(tf.int32, [None]),
+            tf.compat.v1.placeholder(tf.int64, [2]),
+        )
 
         # calc loss for batch
         self.seq_len = tf.compat.v1.placeholder(tf.int32, [None])
         self.loss = tf.reduce_mean(
-            input_tensor=tf.compat.v1.nn.ctc_loss(labels=self.gt_texts, inputs=self.ctc_in_3d_tbc,
-                                                  sequence_length=self.seq_len,
-                                                  ctc_merge_repeated=True))
+            input_tensor=tf.compat.v1.nn.ctc_loss(
+                labels=self.gt_texts, inputs=self.ctc_in_3d_tbc, sequence_length=self.seq_len, ctc_merge_repeated=True
+            )
+        )
 
         # calc loss for each element to compute label probability
-        self.saved_ctc_input = tf.compat.v1.placeholder(tf.float32,
-                                                        shape=[None, None, len(self.char_list) + 1])
-        self.loss_per_element = tf.compat.v1.nn.ctc_loss(labels=self.gt_texts, inputs=self.saved_ctc_input,
-                                                         sequence_length=self.seq_len, ctc_merge_repeated=True)
+        self.saved_ctc_input = tf.compat.v1.placeholder(tf.float32, shape=[None, None, len(self.char_list) + 1])
+        self.loss_per_element = tf.compat.v1.nn.ctc_loss(
+            labels=self.gt_texts, inputs=self.saved_ctc_input, sequence_length=self.seq_len, ctc_merge_repeated=True
+        )
 
         # best path decoding or beam search decoding
         if self.decoder_type == DecoderType.BestPath:
             self.decoder = tf.nn.ctc_greedy_decoder(inputs=self.ctc_in_3d_tbc, sequence_length=self.seq_len)
         elif self.decoder_type == DecoderType.BeamSearch:
-            self.decoder = tf.nn.ctc_beam_search_decoder(inputs=self.ctc_in_3d_tbc, sequence_length=self.seq_len,
-                                                         beam_width=50)
+            self.decoder = tf.nn.ctc_beam_search_decoder(
+                inputs=self.ctc_in_3d_tbc, sequence_length=self.seq_len, beam_width=50
+            )
         # word beam search decoding (see https://github.com/githubharald/CTCWordBeamSearch)
         elif self.decoder_type == DecoderType.WordBeamSearch:
             # prepare information about language (dictionary, characters in dataset, characters forming words)
-            chars = ''.join(self.char_list)
-            word_chars = (data_dir / 'model/wordCharList.txt').open().read().splitlines()[0]
-            corpus = (data_dir / 'data/corpus.txt').open().read()
+            chars = "".join(self.char_list)
+            word_chars = (data_dir / "model/wordCharList.txt").open().read().splitlines()[0]
+            corpus = (data_dir / "data/corpus.txt").open().read()
 
             # decode using the "Words" mode of word beam search
             from word_beam_search import WordBeamSearch
-            self.decoder = WordBeamSearch(50, 'Words', 0.0, corpus.encode('utf8'), chars.encode('utf8'),
-                                          word_chars.encode('utf8'))
+
+            self.decoder = WordBeamSearch(
+                50, "Words", 0.0, corpus.encode("utf8"), chars.encode("utf8"), word_chars.encode("utf8")
+            )
 
             # the input to the decoder must have softmax already applied
             self.wbs_input = tf.nn.softmax(self.ctc_in_3d_tbc, axis=2)
 
     def setup_tf(self) -> Tuple[tf.compat.v1.Session, tf.compat.v1.train.Saver]:
         """Initialize TF."""
-        print('Python: ' + sys.version)
-        print('Tensorflow: ' + tf.__version__)
+        print("Python: " + sys.version)
+        print("Tensorflow: " + tf.__version__)
 
         sess = tf.compat.v1.Session()  # TF session
 
         saver = tf.compat.v1.train.Saver(max_to_keep=1)  # saver saves model to file
-        model_dir = (data_dir / 'model/').absolute()
+        model_dir = (data_dir / "model/").absolute()
         print(f"model_dir={model_dir}")
 
         latest_snapshot = tf.train.latest_checkpoint(model_dir)  # is there a saved model?
 
         # if model must be restored (for inference), there must be a snapshot
         if self.must_restore and not latest_snapshot:
-            raise Exception('No saved model found in: ' + model_dir)
+            raise Exception("No saved model found in: " + model_dir)
 
         # load saved model if available
         if latest_snapshot:
-            print('Init with stored values from ' + latest_snapshot)
+            print("Init with stored values from " + latest_snapshot)
             saver.restore(sess, latest_snapshot)
         else:
-            print('Init with new values')
+            print("Init with new values")
             sess.run(tf.compat.v1.global_variables_initializer())
 
         return sess, saver
@@ -216,7 +240,7 @@ class Model:
                 label_strs[batch_element].append(label)
 
         # map labels to chars for all batch elements
-        return [''.join([self.char_list[c] for c in labelStr]) for labelStr in label_strs]
+        return ["".join([self.char_list[c] for c in labelStr]) for labelStr in label_strs]
 
     def train_batch(self, batch: Batch) -> float:
         """Feed a batch into the NN to train it."""
@@ -224,8 +248,12 @@ class Model:
         max_text_len = batch.imgs[0].shape[0] // 4
         sparse = self.to_sparse(batch.gt_texts)
         eval_list = [self.optimizer, self.loss]
-        feed_dict = {self.input_imgs: batch.imgs, self.gt_texts: sparse,
-                     self.seq_len: [max_text_len] * num_batch_elements, self.is_train: True}
+        feed_dict = {
+            self.input_imgs: batch.imgs,
+            self.gt_texts: sparse,
+            self.seq_len: [max_text_len] * num_batch_elements,
+            self.is_train: True,
+        }
         _, loss_val = self.sess.run(eval_list, feed_dict)
         self.batches_trained += 1
         return loss_val
@@ -233,21 +261,21 @@ class Model:
     @staticmethod
     def dump_nn_output(rnn_output: np.ndarray) -> None:
         """Dump the output of the NN to CSV file(s)."""
-        dump_dir = data_dir /'dump/'
+        dump_dir = data_dir / "dump/"
         if not os.path.isdir(dump_dir):
             os.mkdir(dump_dir)
 
         # iterate over all batch elements and create a CSV file for each one
         max_t, max_b, max_c = rnn_output.shape
         for b in range(max_b):
-            csv = ''
+            csv = ""
             for t in range(max_t):
                 for c in range(max_c):
-                    csv += str(rnn_output[t, b, c]) + ';'
-                csv += '\n'
-            fn = dump_dir + 'rnnOutput_' + str(b) + '.csv'
-            print('Write dump of NN to file: ' + fn)
-            with open(fn, 'w') as f:
+                    csv += str(rnn_output[t, b, c]) + ";"
+                csv += "\n"
+            fn = dump_dir + "rnnOutput_" + str(b) + ".csv"
+            print("Write dump of NN to file: " + fn)
+            with open(fn, "w") as f:
                 f.write(csv)
 
     def infer_batch(self, batch: Batch, calc_probability: bool = False, probability_of_gt: bool = False):
@@ -271,8 +299,11 @@ class Model:
         max_text_len = batch.imgs[0].shape[0] // 4
 
         # dict containing all tensor fed into the model
-        feed_dict = {self.input_imgs: batch.imgs, self.seq_len: [max_text_len] * num_batch_elements,
-                     self.is_train: False}
+        feed_dict = {
+            self.input_imgs: batch.imgs,
+            self.seq_len: [max_text_len] * num_batch_elements,
+            self.is_train: False,
+        }
 
         # evaluate model
         eval_res = self.sess.run(eval_list, feed_dict)
@@ -293,8 +324,12 @@ class Model:
             sparse = self.to_sparse(batch.gt_texts) if probability_of_gt else self.to_sparse(texts)
             ctc_input = eval_res[1]
             eval_list = self.loss_per_element
-            feed_dict = {self.saved_ctc_input: ctc_input, self.gt_texts: sparse,
-                         self.seq_len: [max_text_len] * num_batch_elements, self.is_train: False}
+            feed_dict = {
+                self.saved_ctc_input: ctc_input,
+                self.gt_texts: sparse,
+                self.seq_len: [max_text_len] * num_batch_elements,
+                self.is_train: False,
+            }
             loss_vals = self.sess.run(eval_list, feed_dict)
             probs = np.exp(-loss_vals)
 
@@ -307,4 +342,4 @@ class Model:
     def save(self) -> None:
         """Save model to file."""
         self.snap_ID += 1
-        self.saver.save(self.sess, 'model/snapshot', global_step=self.snap_ID)
+        self.saver.save(self.sess, "model/snapshot", global_step=self.snap_ID)
