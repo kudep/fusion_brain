@@ -1,0 +1,150 @@
+connectors: {}
+services:
+  # TODO: We cann't use explicit service reqs by service name
+  # annotators
+  basic_reader_annotator:
+    basic_reader:
+      connector:
+        protocol: http
+        url: http://basic_reader:2085/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:base_annotator_formatter_out
+      state_manager_method: add_annotation
+  contraction_annotator:
+    contraction_corrector:
+      connector:
+        protocol: http
+        url: http://contraction_corrector:2106/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:base_annotator_formatter_out
+      previous_services:
+        - basic_reader_annotator
+      state_manager_method: add_annotation
+
+  # solvers
+  after_contraction_annotator_solvers:
+    contraction_corrector_solver:
+      connector:
+        protocol: http
+        url: http://contraction_corrector_solver:2107/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:base_formatter_out
+      previous_services:
+        - contraction_annotator
+      state_manager_method: add_hypothesis
+    punctuator:
+      connector:
+        protocol: http
+        url: http://punctuator:2109/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:base_formatter_out
+      previous_services:
+        - basic_reader_annotator
+        - contraction_annotator
+      state_manager_method: add_hypothesis
+    bertgec:
+      connector:
+        protocol: http
+        url: http://bertgec:2114/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:base_formatter_out
+      previous_services:
+        - basic_reader_annotator
+        - contraction_annotator
+      state_manager_method: add_hypothesis
+    gector:
+      connector:
+        protocol: http
+        url: http://gector:2102/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:base_formatter_out
+      previous_services:
+        - basic_reader_annotator
+        - contraction_annotator
+      state_manager_method: add_hypothesis
+  after_basic_reader_solvers:
+    # paraphrases_detector:
+    #   connector:
+    #     protocol: http
+    #     url: http://paraphrases_detector:2112/model
+    #   dialog_formatter: formatters:base_formatter_in
+    #   response_formatter: formatters:base_formatter_out
+    #   previous_services:
+    #     - basic_reader_annotator
+    #   state_manager_method: add_hypothesis
+    rhetoric_detector:
+      connector:
+        protocol: http
+        url: http://rhetoric_detector:2108/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:base_formatter_out
+      previous_services:
+        - basic_reader_annotator
+      state_manager_method: add_hypothesis
+    uncountable_noun_solver:
+      connector:
+        protocol: http
+        url: http://uncountable_noun_solver:2108/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:base_formatter_out
+      previous_services:
+        - basic_reader_annotator
+      state_manager_method: add_hypothesis
+    # conversational_detector:
+    #   connector:
+    #     protocol: http
+    #     url: http://conversational_detector:2111/model
+    #   dialog_formatter: formatters:base_formatter_in
+    #   response_formatter: formatters:base_formatter_out
+    #   previous_services:
+    #     - basic_reader_annotator
+    #   state_manager_method: add_hypothesis
+    sense_blocks_detector:
+      connector:
+        protocol: http
+        url: http://sense_blocks_detector:2098/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:base_formatter_out
+      previous_services:
+        - basic_reader_annotator
+      state_manager_method: add_hypothesis
+    lexicon_checker:
+      connector:
+        protocol: http
+        url: http://lexicon_checker:2113/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:base_formatter_out
+      previous_services:
+        - basic_reader_annotator
+      state_manager_method: add_hypothesis
+
+  post_basic_reader_annotator:
+    evaluator:
+      connector:
+        protocol: http
+        url: http://evaluator:2092/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:base_post_annotator_formatter_out
+      previous_services:
+        - basic_reader_annotator
+        - contraction_annotator
+        - after_contraction_annotator_solvers
+        - after_basic_reader_solvers
+      state_manager_method: add_annotation
+
+  # response_selectors
+  response_selectors:
+    rule_based_response_selector:
+      connector:
+        protocol: http
+        url: http://rule_based_response_selector:2081/model
+      dialog_formatter: formatters:base_formatter_in
+      response_formatter: formatters:response_selector_formatter_out
+      required_previous_services:
+        - basic_reader_annotator
+        - contraction_annotator
+        - post_basic_reader_annotator
+        - after_contraction_annotator_solvers
+        - after_basic_reader_solvers
+        # - xfspeller_solver
+      state_manager_method: add_bot_utterance

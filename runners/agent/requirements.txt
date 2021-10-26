@@ -1,1 +1,4 @@
-gunicorn==19.9.0
+deeppavlov-agent==2.2.0
+pandas==1.1.2
+scipy==1.5.4
+sentry-sdk==0.19.3 
